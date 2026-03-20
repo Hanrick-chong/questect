@@ -1,59 +1,72 @@
 import { NextResponse } from "next/server";
-
+import OpenAI from "openai";
+export const runtime = "nodejs";
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 export async function POST(req) {
+  const start = Date.now();
   try {
-    const { studentAnswer, standardAnswer, teachingContent } = await req.json();
-
-    let score = 0;
-    let feedback = "";
-    let improvement = "";
-    let exam_tip = "";
-
-    const answer = studentAnswer.toLowerCase();
-
-    if (
-      answer.includes("photosynthesis") &&
-      answer.includes("leaves")
-    ) {
-      score = 6;
-      feedback =
-        "Your answer is partially correct because you identified where photosynthesis happens, but it is still incomplete.";
-      improvement =
-        "You should mention chloroplast and explain that glucose is produced during photosynthesis.";
-      exam_tip =
-        "In exam questions, markers usually expect both the location and the product of photosynthesis.";
-    } else if (answer.includes("chloroplast") || answer.includes("glucose")) {
-      score = 8;
-      feedback =
-        "Your answer shows good understanding and includes some important scientific keywords.";
-      improvement =
-        "To get full marks, explain the full process more clearly and connect the points together.";
-      exam_tip =
-        "Examiners often reward answers that include correct scientific terms and a complete explanation.";
-    } else {
-      score = 3;
-      feedback =
-        "Your answer shows limited understanding of the topic and misses key scientific details.";
-      improvement =
-        "Review the teaching content and include the correct process, location, and product of photosynthesis.";
-      exam_tip =
-        "For biology questions, examiners usually reward clear keywords taken from the syllabus.";
+    const { teachingContent, standardAnswer, studentAnswer } = await req.json();
+    // ✅ 输入验证
+    if (!teachingContent || !standardAnswer || !studentAnswer) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
-
-    return NextResponse.json({
-      score,
-      feedback,
-      improvement,
-      exam_tip,
-      studentAnswer,
-      standardAnswer,
-      teachingContent,
+    if (
+      teachingContent.length > 6000 ||
+      standardAnswer.length > 6000 ||
+      studentAnswer.length > 6000
+    ) {
+      return NextResponse.json({ error: "Input too long" }, { status: 413 });
+    }
+    const prompt = `
+You are an educational AI grading assistant.
+Follow these rules and output ONLY valid JSON.
+The user will provide:
+1. Teaching Content
+2. Standard Answer
+3. Student Answer
+Your job:
+- Detect subquestions (like 1(a), 1(b), 1(c)).
+- Detect each subquestion's mark value.
+- Grade each subquestion separately.
+- Give detailed feedback and improvement advice.
+Output strictly in:
+{
+  "total_score": 11,
+  "total_full_marks": 15,
+  "questions": [
+    {
+      "question_number": "1(a)",
+      "full_marks": 2,
+      "score": 1,
+      "feedback": "...",
+      "improvement": "...",
+      "scoring_points": ["...","..."]
+    }
+  ]
+}
+Teaching Content:
+${teachingContent}
+Standard Answer:
+${standardAnswer}
+Student Answer:
+${studentAnswer}
+`;
+    const completion = await client.chat.completions.create({
+      model: MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      max_tokens: 1200,
     });
+    const raw = completion.choices[0]?.message?.content || "{}";
+    const cleaned = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+    console.log(`[Questect|Grade] Done in ${Date.now() - start}ms`);
+    return NextResponse.json(parsed);
   } catch (error) {
-    console.error("Mock grading error:", error);
-    return NextResponse.json(
-      { error: "Mock grading failed" },
-      { status: 500 }
-    );
+    console.error("[Questect|Grade Error]", error);
+    return NextResponse.json({ error: "Failed to grade answer." }, { status: 500 });
   }
 }
